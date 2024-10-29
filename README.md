@@ -37,5 +37,5 @@ cd pt_int4_ansible
 ## Запуск плейбука
 Чтобы запустить плейбук, используйте следующую команду:
 ```bash
-ansible-playbook -i hosts debian.yaml
+ansible-playbook -i inventory debian.yaml
 ```
