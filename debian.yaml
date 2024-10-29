@@ -1,0 +1,205 @@
+---
+- name: Configure Debian 11 server and install PostgreSQL 16 on debian_servers
+  hosts: debian_servers
+  become: true
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+    backup_dir: /var/backups/postgresql  # Директория для резервных копий
+  tasks:
+    # Step 1: Update apt package list and upgrade packages
+    - name: Update apt and upgrade packages
+      apt:
+        update_cache: yes
+        upgrade: dist
+
+    # Step 2: Install required dependencies
+    - name: Install dependencies
+      apt:
+        name:
+          - gnupg
+          - lsb-release
+          - ca-certificates
+          - apt-transport-https
+          - ufw  # Установка ufw
+          - python3-pip  # Установка pip
+          - postgresql-server-dev-all  # Установка пакета разработки PostgreSQL
+          - fail2ban  # Установка fail2ban
+          - iptables
+          - iptables-persistent  # Установка iptables и iptables-persistent
+          - rsyslog  # Установка rsyslog
+          - netdata  # Установка netdata
+          - nmon  # Установка nmon
+        state: present
+
+    # Step 3: Install psycopg2
+    - name: Install psycopg2
+      pip:
+        name: psycopg2-binary
+        state: present
+        executable: pip3
+
+    # Step 4: Update apt cache
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    # Step 5: Install PostgreSQL 16
+    - name: Install PostgreSQL 16
+      apt:
+        name: postgresql
+        state: present
+
+    # Step 6: Ensure PostgreSQL is running
+    - name: Ensure PostgreSQL is running and enabled on boot
+      service:
+        name: postgresql
+        state: started
+        enabled: yes
+
+    # Step 7: Open firewall for PostgreSQL
+    - name: Open firewall for PostgreSQL
+      ufw:
+        rule: allow
+        port: '5432'
+
+    # Step 8: Create a PostgreSQL user
+    - name: Create a PostgreSQL user
+      become_user: postgres
+      postgresql_user:
+        name: myuser
+        password: mypassword
+        state: present  # Убедитесь, что пользователь создан
+
+    # Step 9: Create a PostgreSQL database
+    - name: Create a PostgreSQL database
+      become_user: postgres
+      postgresql_db:
+        name: mydb
+        owner: myuser
+        encoding: UTF8
+
+    # Step 10: Grant all privileges on all tables in the public schema to the user
+    - name: Grant all privileges on all tables in the public schema
+      become_user: postgres
+      postgresql_query:
+        query: "GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO myuser;"
+        db: mydb
+
+    # Step 11: Start and enable fail2ban service
+    - name: Ensure fail2ban is running and enabled on boot
+      service:
+        name: fail2ban
+        state: started
+        enabled: yes
+
+    # Step 12: Set up iptables firewall rules
+    - name: Allow established and related connections
+      ansible.builtin.iptables:
+        chain: INPUT
+        in_interface: ens33
+        ctstate: ESTABLISHED,RELATED
+        jump: ACCEPT
+
+    - name: Drop invalid packets
+      ansible.builtin.iptables:
+        chain: INPUT
+        in_interface: ens33
+        ctstate: INVALID
+        jump: DROP
+
+    - name: Allow ICMP (ping)
+      ansible.builtin.iptables:
+        chain: INPUT
+        in_interface: ens33
+        protocol: icmp
+        jump: ACCEPT
+
+    - name: Allow SSH on port 22
+      ansible.builtin.iptables:
+        chain: INPUT
+        in_interface: ens33
+        protocol: tcp
+        destination_port: 22
+        ctstate: NEW
+        jump: ACCEPT
+
+    - name: Drop all other incoming traffic
+      ansible.builtin.iptables:
+        chain: INPUT
+        in_interface: ens33
+        jump: DROP
+
+    # Step 13: Save iptables rules
+    - name: Save iptables rules to /etc/iptables/rules.v4
+      shell: iptables-save > /etc/iptables/rules.v4
+
+    # Step 14: Create fail2ban jail.local configuration
+    - name: Create fail2ban jail.local configuration
+      copy:
+        dest: /etc/fail2ban/jail.local
+        content: |
+          [sshd]
+          enabled = true
+          port = ssh
+          filter = sshd
+          logpath = /var/log/auth.log
+          maxretry = 5
+          bantime = 600
+
+          [http-get-dos]
+          enabled = true
+          filter = http-get-dos
+          logpath = /var/log/apache2/access.log
+          maxretry = 300
+          findtime = 300
+          bantime = 600
+          action = iptables[name=HTTP, port=http, protocol=all]
+
+    # Step 15: Restart fail2ban service
+    - name: Restart fail2ban service
+      service:
+        name: fail2ban
+        state: restarted
+        
+    # Step 16: Configure rsyslog for logging
+    - name: Configure rsyslog
+      copy:
+        dest: /etc/rsyslog.d/50-default.conf
+        content: |
+          # Log all messages to /var/log/messages
+          *.*;auth,authpriv.none          -/var/log/messages
+          authpriv.*                      /var/log/auth.log
+          *.*;mail.none;news.none        -/var/log/syslog
+
+    # Step 17: Restart rsyslog service
+    - name: Restart rsyslog service
+      service:
+        name: rsyslog
+        state: restarted
+
+    # Step 18: Setup automatic backup for PostgreSQL
+    - name: Ensure backup directory exists
+      file:
+        path: "{{ backup_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Create PostgreSQL backup script
+      copy:
+        dest: /usr/local/bin/pg_backup.sh
+        content: |
+          #!/bin/bash
+          TIMESTAMP=$(date +"%F")
+          BACKUP_FILE="{{ backup_dir }}/mydb_$TIMESTAMP.sql"
+          sudo -u postgres pg_dump mydb > "$BACKUP_FILE"
+          # Удаление резервных копий старше 7 дней
+          find "{{ backup_dir }}" -type f -name "*.sql" -mtime +7 -exec rm {} \;
+        mode: '0755'
+
+    - name: Schedule PostgreSQL backup via cron
+      cron:
+        name: "PostgreSQL backup"
+        minute: "0"
+        hour: "2"
+        job: "/usr/local/bin/pg_backup.sh"
+        state: present
