@@ -1,6 +1,6 @@
 # pt_int4_ansible
 
-# Ansible Playbook for Debian 10 Server Configuration
+# Ansible Playbook for Debian 11 Server Configuration
 
 Этот Ansible плейбук предназначен для автоматизации настройки сервера на базе Debian 10. Он выполняет следующие действия:
 
@@ -10,7 +10,7 @@
 
 1. Обновляет список пакетов и устанавливает обновления.
 2. Устанавливает необходимые зависимости, включая:
-   - PostgreSQL 11
+   - PostgreSQL 16
    - fail2ban
    - iptables
    - netdata
@@ -33,3 +33,9 @@ git clone https://github.com/SL1MP/pt_int4_ansible
 cd pt_int4_ansible
 ```
 3. Отредактируйте инвентарь Ansible для указания целевых серверов
+
+## Запуск плейбука
+Чтобы запустить плейбук, используйте следующую команду:
+```bash
+ansible-playbook -i hosts debian.yaml
+```
